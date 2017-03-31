@@ -18,6 +18,10 @@ var trackball = {
   radius:       150,
 };
 
+const cameraVector = Vector.create([0,0,1]);
+const lightVector = Vector.create([0,-1,0]);
+var moving = false;
+
 $(document).ready(function () { trackball.init(); });
 
 /*
@@ -29,12 +33,14 @@ trackball.init = function () {
   trackball.cx = trackball.canvas.getContext('2d');
   trackball.cx.strokeStyle = 'rgb(250,0,0)';
   trackball.scale = 1;
-  trackball.rotate1 = 0;
-  trackball.rotate2 = 0;
+  trackball.perspective = 6;
+  trackball.rotate = 0;
   $('#zoomSlider').bind("change",trackball.zoom);
-  $('#perspectiveSlider').bind("change",trackball.perspective);
+  $('#perspectiveSlider').bind("change",trackball.perspectiveFunc);
   $('#object1').bind("change",trackball.load);
-  $('#resetButton').bind("click",trackball.init);
+  //$('#resetButton').bind("click",trackball.init);
+    
+  modelMat = Matrix.I(4);
     
   // set check boxes up
   $('#strokeCheckbox').bind("change", function () {trackball.stroke = this.checked;}).trigger('change');
@@ -42,7 +48,14 @@ trackball.init = function () {
   $('#cullCheckbox').bind("change", function () {trackball.cullBack = this.checked;}).trigger('change');
   $('#cullFrontCheckbox').bind("change", function () {trackball.cullFront = this.checked;}).trigger('change');
   $('#sortCheckbox').bind("change", function () {trackball.HSR = this.checked;}).trigger('change');
+  $('#lightCheckbox').bind("change", function () {trackball.light = this.checked;}).trigger('change');
+  $('#perspectiveCheckbox').bind("change", function () {trackball.perspectiveBool = this.checked;}).trigger('change');
   $('input[type], select').bind("change",trackball.display);
+    
+  // mouse
+  $(trackball.canvas).bind("mousedown",trackball.mousedown);
+  $(trackball.canvas).bind("mousemove",trackball.mousemove);
+  $(trackball.canvas).bind("mouseup",trackball.mouseup);
   
     // set world coords to (-1,-1) to (1,1) or so
   trackball.cx.setTransform(trackball.radius, 0, 0, -trackball.radius, 
@@ -50,14 +63,7 @@ trackball.init = function () {
   trackball.load();
 }
 
-trackball.initTimer = function () {
-  function reSetTimeout() {
-    trackball.display();
-    setTimeout(reSetTimeout, 200);
-  }
-  reSetTimeout();
-  trackball.initTimer = () => {};
-};
+
 
 /*
  * Get selected JSON object file
@@ -72,7 +78,6 @@ trackball.load = function() {
     
     trackball.display();
       
-    trackball.initTimer();
   }); 
 }
 
@@ -148,9 +153,15 @@ trackball.Rotate4 = function(theta,n) {
 }
 
 // scale matrix
-trackball.Scale4 = function() {
-    let scale = trackball.scale;
-    return Matrix.Diagonal([scale, scale, scale, 0]);
+trackball.scalePerspective4 = function() {
+    let s = trackball.scale;
+    let d = trackball.perspectiveBool?(-1/(trackball.perspective)):0;
+    // console.log(d);
+    return Matrix.create([
+                         [s, 0, 0, 0],
+                         [0, s, 0, 0],
+                         [0, 0, s, 0],
+                         [0, 0, d, 1] ]);
 }
     
 trackball.display = function() {
@@ -159,9 +170,7 @@ trackball.display = function() {
   trackball.cx.beginPath();
   trackball.cx.arc(0,0,1,6.283,0,true);
   trackball.cx.stroke();
-  trackball.cx.lineWidth = 0.006;
-  trackball.rotate1 = (trackball.rotate1 + .1) % (Math.PI * 2);
-  trackball.rotate2 = (trackball.rotate1 + .09) % (Math.PI * 2);
+  trackball.cx.lineWidth = 0.01;
   trackball.drawObject();
 }
 
@@ -170,9 +179,10 @@ trackball.zoom = function(ev) {
   trackball.scale = $('#zoomSlider').val() / 100;
 }
 
-trackball.perspective = function(ev) {
+trackball.perspectiveFunc = function(ev) {
   $('#perspective').text(($('#perspectiveSlider').val()/10).toFixed(2));
-  var persp = $('#perspectiveSlider').val() / 10;
+  trackball.perspective = $('#perspectiveSlider').val() / 10;
+  //console.log(trackball.perspective);
 }
 
 trackball.showVector = function(v) {
@@ -184,15 +194,64 @@ log = function(s) {
      $('#messages').append(s + "<br>");
 }
 
+trackball.getPoint = function(ev) 
+{
+    //Get the x and y
+    let x = (ev.pageX - trackball.screenWidth/2 - 240  )/trackball.radius;
+    let y = -(ev.pageY - trackball.screenHeight/2 - 70 )/trackball.radius;
+
+    let zSquared = 1 - x*x - y*y;
+    let z;
+    if (zSquared < 0 ) {
+	   z = 0;
+    }
+    else {
+       z = Math.sqrt( 1 - x*x - y*y )
+    }
+    return Vector.create([x,y,z]);
+}
+
+
+trackball.mousedown = function(ev) 
+{
+  // Store original point
+  oldModelMat = modelMat.multiply(1);
+  p1 = trackball.getPoint(ev);
+  moving = true;
+}
+
+trackball.mousemove = function(ev) 
+{
+  if ( moving ) {
+    // Get angles between different vectors
+    let p2 = trackball.getPoint(ev);
+    let n = p1.cross(p2); 
+    let theta = p1.angleFrom(p2);
+ 
+    // Rotate
+    modelMat = oldModelMat.multiply(1);
+    modelMat = trackball.Rotate4(theta, n).multiply(modelMat);
+    trackball.display();
+  }
+}
+
+
+trackball.mouseup = function(ev) 
+{
+  moving = false;
+}
+
+
 trackball.drawObject = function () {
     //console.log('draw object');
     //console.log('faces', faces);
     //console.log('vertices', vertices);
+    if (!faces) {
+        return;
+    }
     
-    let rotateMatrix1 = trackball.Rotate4(trackball.rotate1, Vector.create([0,1,0]));
-    let rotateMatrix2 = trackball.Rotate4(trackball.rotate2, Vector.create([1,0,0]));
-    let scaleMatrix = trackball.Scale4();
-    const cameraVector = Vector.create([0,0,1]);
+    let rotateMatrix1 = trackball.Rotate4(trackball.rotate, Vector.create([1,1,0]));
+    let scaleMatrix = trackball.scalePerspective4();
     //console.log('camera', cameraVector);
     
     const Vector4dTo3d = v => {
@@ -207,12 +266,19 @@ trackball.drawObject = function () {
            1
         ]);
 
-        return rotateMatrix1.multiply(rotateMatrix2).multiply(scaleMatrix).multiply(vec);
+        const v3 = modelMat.multiply(vec);
+        //v3.elements[3] = 1;
+        const v2 = scaleMatrix.multiply(v3);
+        //return v2;
+        let w = v2.elements[3];
+        let vElem = v2.elements;
+        return Vector.create([vElem[0]/w, vElem[1]/w, vElem[2]/w ]);
     };
     
     
     let newFaces = faces.map((f) => ({Kd:f.Kd, vertices: f.indices.map(applyTranformations)}));
     
+    // HSR
     const getMidPoint = vertices => {
         let zAdded = 0;
         for (vertex of vertices) {
@@ -230,21 +296,38 @@ trackball.drawObject = function () {
     // draw the object
     for (face of newFaces) {
         //console.log('face', face);
-        trackball.cx.fillStyle = `rgb(${255*face.Kd[0]|0}, ${255*face.Kd[1]|0}, ${255*face.Kd[2]|0})`;
+        
+        // culling
+        let newNormal = Vector4dTo3d(face.vertices[1].subtract(face.vertices[0])).cross(Vector4dTo3d(face.vertices[2].subtract(face.vertices[0]))); 
+        
+        newNormal = newNormal.toUnitVector();
+        
+        //const cameraVector = Vector.create([0,0,1]);
+        
+        
+        // Light
+        if (trackball.light) {
+            let lightNum = (lightVector.dot(newNormal) + 1.5)/2;
+            // console.log('light num', lightNum);
+            trackball.cx.fillStyle = `rgb(${255*(face.Kd[0]*lightNum)|0}, ${255*(face.Kd[1]*lightNum)|0}, ${255*(face.Kd[2]*lightNum)|0})`;
+        } else {
+            trackball.cx.fillStyle = `rgb(${255*face.Kd[0]|0}, ${255*face.Kd[1]|0}, ${255*face.Kd[2]|0})`;
+        }
+        
+        trackball.cx.strokeStyle = trackball.cx.fillStyle;
+        
         //console.log('fillstyle',trackball.cx.fillStyle);
         trackball.cx.beginPath();
         
         
-        
-        // culling
-        let newNormal = Vector4dTo3d(face.vertices[1].subtract(face.vertices[0])).cross(Vector4dTo3d(face.vertices[2].subtract(face.vertices[0]))); 
         let cullNum = cameraVector.dot(newNormal);
         
-        //console.log(cullNum);
+        // Cull Back
         if (cullNum > 0 && trackball.cullBack) {
             continue;
         }
         
+        // Cull Front
         if (cullNum <= 0 && trackball.cullFront) {
             continue;
         }
